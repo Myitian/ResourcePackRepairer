@@ -8,10 +8,19 @@ public static class PNGRepairer
     public static ReadOnlySpan<byte> Signature => [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
     public const uint IDAT = ('I' << 24) | ('D' << 16) | ('A' << 8) | 'T';
     public const uint IEND = ('I' << 24) | ('E' << 16) | ('N' << 8) | 'D';
+
+    /// <param name="source">PNG input stream, must be readable</param>
+    /// <param name="destination">PNG output stream, must be writeable</param>
+    /// <exception cref="InvalidDataException" />
+    /// <exception cref="NotSupportedException" />
     public static void Repair(Stream source, Stream destination)
     {
         Repair(source, destination, new());
     }
+    /// <param name="source">PNG input stream, must be readable</param>
+    /// <param name="destination">PNG output stream, must be writeable</param>
+    /// <exception cref="InvalidDataException" />
+    /// <exception cref="NotSupportedException" />
     public static void Repair(Stream source, Stream destination, Options options)
     {
         // Read and write PNG Signature

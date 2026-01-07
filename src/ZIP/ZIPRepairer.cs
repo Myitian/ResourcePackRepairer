@@ -6,10 +6,20 @@ namespace ResourcePackRepairer.ZIP;
 
 public static class ZIPRepairer
 {
+    /// <param name="source">ZIP input stream, must be readable and seekable</param>
+    /// <param name="destination">ZIP output stream, must be writeable</param>
+    /// <exception cref="EndOfStreamException" />
+    /// <exception cref="InvalidDataException" />
+    /// <exception cref="NotSupportedException" />
     public static void Repair(Stream source, Stream destination)
     {
         Repair(source, destination, new());
     }
+    /// <param name="source">ZIP input stream, must be readable and seekable</param>
+    /// <param name="destination">ZIP output stream, must be writeable</param>
+    /// <exception cref="EndOfStreamException" />
+    /// <exception cref="InvalidDataException" />
+    /// <exception cref="NotSupportedException" />
     public static void Repair(Stream source, Stream destination, Options options)
     {
         // Read EOCD from source
