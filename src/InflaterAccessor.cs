@@ -1,7 +1,7 @@
 ﻿using System.Reflection;
 using System.Runtime.CompilerServices;
 
-namespace ResourcePackRepairer.PNG;
+namespace ResourcePackRepairer;
 
 // Warning!
 // To simplify the codebase, reflection and UnsafeAccessorAttribute is used here to directly access
@@ -11,7 +11,7 @@ internal static class InflaterAccessor
     public const string InflaterType = "System.IO.Compression.Inflater, System.IO.Compression";
     public const string ZLibStreamHandleType = "System.IO.Compression.ZLibNative+ZLibStreamHandle, System.IO.Compression";
 
-    // Future
+    // Future (.NET 11, not yet released but already in the repository)
     [UnsafeAccessor(UnsafeAccessorKind.StaticMethod)]
     [return: UnsafeAccessorType(InflaterType)]
     private static extern object CreateInflater(
@@ -49,17 +49,22 @@ internal static class InflaterAccessor
     private static readonly FieldInfo? Inflater_zlibStream = Type.GetType(InflaterType)
         ?.GetField("_zlibStream", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
 
+    private static bool useAltCreateInflaterMethod = false;
     public static IDisposable CreateInflater()
     {
         const int Deflate_DefaultWindowBits = -15;
-        try
+        if (!useAltCreateInflaterMethod)
         {
-            return (IDisposable)CreateInflater(null, Deflate_DefaultWindowBits);
+            try
+            {
+                return (IDisposable)CreateInflater(null, Deflate_DefaultWindowBits);
+            }
+            catch
+            {
+                useAltCreateInflaterMethod = true;
+            }
         }
-        catch
-        {
-            return (IDisposable)CreateInflater(Deflate_DefaultWindowBits);
-        }
+        return (IDisposable)CreateInflater(Deflate_DefaultWindowBits);
     }
 
     public static uint GetAvailableIn(IDisposable inflater)

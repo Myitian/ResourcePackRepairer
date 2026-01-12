@@ -15,7 +15,7 @@ public struct LocalFileHeader(CentralDirectoryHeader cdh) : IDataStruct
     public uint CompressedSize = cdh.CompressedSize;
     public uint UncompressedSize = cdh.UncompressedSize;
     public ushort FileNameLength = cdh.FileNameLength;
-    public ushort ExtraFieldLength = cdh.ExtraFieldLength;
+    public ushort ExtraFieldLength;
     public void ReverseEndianness()
     {
         VersionNeeded = BinaryPrimitives.ReverseEndianness(VersionNeeded);

@@ -14,8 +14,11 @@ Currently, it can repair the following types of file corruption:
 
 TODOs:
 
-- Supporting ZIP-64 files
 - Parsing command-line arguments
+
+> [!IMPORTANT]
+>
+> These corrupted, malformed or non-standard files typically originate from resource packs processed by obfuscation/protection tools. Do not use the extracted files for purposes other than study and research without the copyright holder's permission.
 
 > [!NOTE]
 >
@@ -23,6 +26,6 @@ TODOs:
 >
 > Furthermore, if your file is truly corrupted in its data portion, this tool can only restore it to a well-formed file at best, not recover the corrupted data.
 
-> [!IMPORTANT]
+> [!NOTE]
 >
-> These corrupted, malformed or non-standard files typically originate from resource packs processed by obfuscation/protection tools. Do not use the extracted files for purposes other than study and research without the copyright holder's permission.
+> The ZIP-64 support is not fully tested. When you find a bug, please attach the file that triggered the bug to the issue.

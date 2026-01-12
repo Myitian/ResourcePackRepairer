@@ -90,7 +90,7 @@ public static class PNGRepairer
 
     internal static void InflaterToAdler32(IDisposable inflater, Adler32 adler32)
     {
-        const int BufferSize = 65536;
+        const int BufferSize = 8192;
 
         byte[] array = ArrayPool<byte>.Shared.Rent(BufferSize);
         try

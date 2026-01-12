@@ -9,7 +9,7 @@ internal static class StreamHelpers
     // position after returned:
     //                   v
     // [*][*][0][1][2][3][*][*]
-    public static bool ReadBackwardsUntilFind4ByteSeq(this Stream stream, ReadOnlySpan<byte> bytes)
+    public static bool ReadBackwardsUntilFind4ByteSeq(this Stream stream, ReadOnlySpan<byte> bytes, long distanceLimit = -1)
     {
         if (bytes.Length != 4)
             throw new ArgumentException("bytes.Length must be 4!");
@@ -21,8 +21,10 @@ internal static class StreamHelpers
         stream.Position = pos -= 4;
         if (!stream.TryReadExactly(MemoryMarshal.AsBytes(new Span<uint>(ref current))))
             return false;
-        while (current != value)
+        while (current != value && distanceLimit != 0)
         {
+            if (distanceLimit > 0)
+                distanceLimit--;
             if (--pos < 0)
                 return false;
             stream.Position = pos;

@@ -1,13 +1,14 @@
 ﻿using System.Buffers;
-using System.IO.Compression;
+using System.Buffers.Binary;
 using System.IO.Hashing;
+using System.Text;
 
 namespace ResourcePackRepairer.ZIP;
 
 public static class ZIPRepairer
 {
     /// <param name="source">ZIP input stream, must be readable and seekable</param>
-    /// <param name="destination">ZIP output stream, must be writeable</param>
+    /// <param name="destination">ZIP output stream, must be writeable, and the <see cref="Stream.Length"/> property must be readable</param>
     /// <exception cref="EndOfStreamException" />
     /// <exception cref="InvalidDataException" />
     /// <exception cref="NotSupportedException" />
@@ -16,138 +17,276 @@ public static class ZIPRepairer
         Repair(source, destination, new());
     }
     /// <param name="source">ZIP input stream, must be readable and seekable</param>
-    /// <param name="destination">ZIP output stream, must be writeable</param>
+    /// <param name="destination">ZIP output stream, must be writeable, and the <see cref="Stream.Length"/> property must be readable</param>
     /// <exception cref="EndOfStreamException" />
     /// <exception cref="InvalidDataException" />
     /// <exception cref="NotSupportedException" />
-    public static void Repair(Stream source, Stream destination, Options options)
+    public static void Repair(Stream source, Stream destination, in Options options)
     {
         // Read EOCD from source
-        if (!EndOfCentralDirectory.FindFromStream(source, out EndOfCentralDirectory eocd))
-            throw new InvalidDataException("Cannot find EOCD!");
+        EndOfCentralDirectory64 eocd64 = FindEOCD(source, options, out byte[] extras, out byte[] comment);
         if (options.IgnoreDiskNumber)
         {
-            eocd.DiskNumber = 0;
-            eocd.StartDiskNumber = 0;
+            eocd64.DiskNumber = 0;
+            eocd64.StartDiskNumber = 0;
         }
-        else if (eocd.DiskNumber != 0 || eocd.StartDiskNumber != 0)
-        {
+        else if (eocd64.DiskNumber != 0 || eocd64.StartDiskNumber != 0)
             throw new NotSupportedException("Spanned ZIP is not supported!");
-        }
-        byte[] comment = source.ReadBytes(eocd.CommentLength);
 
-        source.Position = eocd.DirectoryOffset;
-        List<(CentralDirectoryHeader, byte[])> cdhs = [];
-        while (source.Position < eocd.DirectoryOffset + eocd.DirectorySize)
+        source.Position = (long)eocd64.DirectoryOffset;
+        long endCD = (long)(eocd64.DirectoryOffset + eocd64.DirectorySize);
+        List<FullCentralDirectoryHeader> cdhs = [];
+        ExtraFieldCollection lfhExtraFields = new();
+        while (source.Position < endCD)
         {
             // Read CDH from source
             long pos = source.Position;
             if (!source.StartsWith(CentralDirectoryHeader.Signature))
                 throw new InvalidDataException($"Cannot find CDH signature at {pos}!");
-            CentralDirectoryHeader cdh = IDataStruct.ReadExactlyFromStream<CentralDirectoryHeader>(source);
-            if (options.IgnoreDiskNumber)
-                cdh.StartDiskNumber = 0;
-            else if (cdh.StartDiskNumber != 0)
+            FullCentralDirectoryHeader fcdh = FullCentralDirectoryHeader.ReadFromStream(source);
+            fcdh.ExtraFields.ReadZip64ExtraField(
+                fcdh.CDH.UncompressedSize, fcdh.CDH.CompressedSize, fcdh.CDH.LocalHeaderOffset, fcdh.CDH.StartDiskNumber,
+                out ulong uncompressedSize, out ulong compressedSize, out ulong localHeaderOffset, out uint startDiskNumber);
+            if (!options.IgnoreDiskNumber && startDiskNumber != 0)
                 throw new NotSupportedException("Spanned ZIP is not supported!");
-            byte[] dynLengthContent = source.ReadBytes(cdh.FileNameLength + cdh.ExtraFieldLength + cdh.CommentLength);
+            if (localHeaderOffset > (ulong)source.Length)
+                throw new InvalidDataException($"localHeaderOffset too large: {localHeaderOffset}!");
 
             // Read LFH from source
             pos = source.Position;
-            source.Position = cdh.LocalHeaderOffset;
+            source.Position = (long)localHeaderOffset;
             if (!source.StartsWith(LocalFileHeader.Signature))
-                throw new InvalidDataException($"Cannot find LFH signature at {pos}!");
+                throw new InvalidDataException($"Cannot find LFH signature at {localHeaderOffset}!");
             LocalFileHeader lfh = IDataStruct.ReadExactlyFromStream<LocalFileHeader>(source);
+            source.Seek(lfh.FileNameLength, SeekOrigin.Current);
+            lfhExtraFields.ReadFromBytes(source.ReadBytes(lfh.ExtraFieldLength));
             long payloadStart = source.Position + lfh.FileNameLength + lfh.ExtraFieldLength;
 
-            // Try decompress to get correct CRC32 and length
+            // Try decompress to get correct CRC32 and size
             source.Position = payloadStart;
-            if (cdh.CompressionMethod is 0 or 8 && (options.ReCalculateCRC32 || options.ReCalculateUncompressedSize))
-            {
-                LengthLimitedStream lls = new(source, cdh.CompressedSize);
-                using Stream s = cdh.CompressionMethod == 0 ? lls : new DeflateStream(lls, CompressionMode.Decompress);
-                CalculateStreamCRC32(lls, out uint crc32, out ulong length);
-                if (options.ReCalculateCRC32)
-                    cdh.CRC32 = crc32;
-                if (options.ReCalculateUncompressedSize)
-                {
-                    if (length <= uint.MaxValue)
-                        cdh.UncompressedSize = (uint)length;
-                    else
-                    {
-                        // TODO: ZIP-64
-                        cdh.UncompressedSize = uint.MaxValue;
-                    }
-                }
-            }
+            AnalyzeBody(source, options, ref fcdh.CDH, ref uncompressedSize, ref compressedSize);
 
             // Save CDH to list
-            cdh.LocalHeaderOffset = GetUInt32OrThrow(destination.Length, "Destination offset is too large!");
-            cdhs.Add((cdh, dynLengthContent));
+            localHeaderOffset = (ulong)destination.Length;
+            fcdh.CDH.ApplyNewValue(fcdh.ExtraFields, uncompressedSize, compressedSize, localHeaderOffset, 0);
+            cdhs.Add(fcdh);
 
             // Write LFH to destination
-            lfh = new(cdh);
+            lfh = new(fcdh.CDH);
+            lfh.ApplyNewValue(lfhExtraFields, uncompressedSize, compressedSize);
+            if (!lfhExtraFields.TryGetLengthInBytes(out lfh.ExtraFieldLength))
+                throw new InvalidDataException($"Overlong ExtraField for {Encoding.UTF8.GetString(fcdh.FileName)}!");
             destination.Write(LocalFileHeader.Signature);
             IDataStruct.WriteToStream(destination, lfh);
-            destination.Write(dynLengthContent, 0, lfh.FileNameLength + lfh.ExtraFieldLength);
+            destination.Write(fcdh.FileName, 0, fcdh.FileName.Length);
+            lfhExtraFields.WriteToStream(destination);
 
             // Copy compressed data from source to destination
             source.Position = payloadStart;
-            source.LengthCopy(destination, lfh.CompressedSize);
+            source.LengthCopy(destination, compressedSize);
             source.Position = pos;
         }
-        uint cdhStartPos = GetUInt32OrThrow(destination.Length, "Destination offset is too large!");
-        foreach ((CentralDirectoryHeader cdh, byte[] dynLengthContent) in cdhs)
+        ulong cdhStartPos = (ulong)destination.Length;
+        foreach (FullCentralDirectoryHeader fcdh in cdhs)
         {
             // Write CDH to destination
-            destination.Write(CentralDirectoryHeader.Signature);
-            IDataStruct.WriteToStream(destination, cdh);
-            destination.Write(dynLengthContent, 0, dynLengthContent.Length);
+            fcdh.WriteToStream(destination);
         }
 
         // Write EOCD to destination
-        eocd.DirectoryOffset = cdhStartPos;
-        eocd.DirectorySize = GetUInt32OrThrow(destination.Length - cdhStartPos, "Destination offset is too large!");
+        eocd64.DirectoryOffset = cdhStartPos;
+        eocd64.DirectorySize = (ulong)destination.Length - cdhStartPos;
         if (options.ReCalculateEntryCount)
-            eocd.TotalEntries = eocd.EntriesOnThisDisk = GetUInt16OrThrow(cdhs.Count, "Too many central directory headers!");
+            eocd64.TotalEntries = eocd64.EntriesOnThisDisk = (uint)cdhs.Count;
+        EndOfCentralDirectory eocd = EndOfCentralDirectory.CreateFromEOCD64(eocd64, out bool overflowed);
+        eocd.CommentLength = (ushort)comment.Length;
+        if (overflowed)
+        {
+            long eocd64offset = destination.Length;
+            destination.Write(EndOfCentralDirectory64.Signature);
+            IDataStruct.WriteToStream(destination, eocd64);
+            destination.Write(EndOfCentralDirectory64Locator.Signature);
+            IDataStruct.WriteToStream(destination, new EndOfCentralDirectory64Locator()
+            {
+                DiskNumber = 0,
+                RelativeOffset = (ulong)eocd64offset,
+                TotalDisks = 1
+            });
+        }
         destination.Write(EndOfCentralDirectory.Signature);
         IDataStruct.WriteToStream(destination, eocd);
         destination.Write(comment, 0, comment.Length);
-
-        static uint GetUInt32OrThrow(long value, string msg)
-        {
-            return value <= uint.MaxValue ? (uint)value
-                : throw new NotSupportedException(msg);
-        }
-        static ushort GetUInt16OrThrow(int value, string msg)
-        {
-            return value <= ushort.MaxValue ? (ushort)value
-                : throw new NotSupportedException(msg);
-        }
     }
 
-    public static void CalculateStreamCRC32(Stream stream, out uint crc32, out ulong length)
+    private static EndOfCentralDirectory64 FindEOCD(Stream stream, Options options, out byte[] extras, out byte[] comment)
     {
-        const int BufferSize = 65536;
-
-        byte[] array = ArrayPool<byte>.Shared.Rent(BufferSize);
+        if (!EndOfCentralDirectory.FindFromStream(stream, out EndOfCentralDirectory eocd, out EndOfCentralDirectory64Locator? locator))
+            throw new InvalidDataException("Cannot find EOCD!");
+        extras = [];
+        comment = stream.ReadBytes(eocd.CommentLength);
+        do
+        {
+            if (!locator.HasValue)
+                break;
+            if (!options.IgnoreDiskNumber && (locator.Value.DiskNumber != 0 || locator.Value.TotalDisks != 1))
+                throw new NotSupportedException("Spanned ZIP is not supported!");
+            ulong offset = locator.Value.RelativeOffset;
+            if (offset > (ulong)stream.Length)
+                break;
+            stream.Position = (long)offset;
+            if (!stream.StartsWith(EndOfCentralDirectory64.Signature)
+                || !IDataStruct.TryReadFromStream(stream, out EndOfCentralDirectory64 eocd64)
+                || eocd64.DirectoryOffset > long.MaxValue
+                || eocd64.DirectorySize > long.MaxValue
+                || eocd64.DirectoryOffset + eocd64.DirectorySize > (ulong)stream.Length
+                || eocd64.SizeOfRecord > EndOfCentralDirectory64.MaxAllowedSize)
+                break;
+            if (options.ValidateEOCD64ByEOCD)
+            {
+                if (eocd.DirectorySize != uint.CreateSaturating(eocd64.DirectorySize)
+                    || eocd.DirectoryOffset != uint.CreateSaturating(eocd64.DirectoryOffset))
+                    break;
+            }
+            extras = stream.ReadBytes(eocd64.SizeOfExtras);
+            return eocd64;
+        } while (false);
+        return new(eocd);
+    }
+    private static void AnalyzeBody(Stream source, Options options, ref CentralDirectoryHeader cdh, ref ulong uncompressedSize, ref ulong compressedSize)
+    {
+        if ((cdh.GeneralPurposeFlag & 1) != 0) // Encryption
+            return;
+        switch (cdh.CompressionMethod)
+        {
+            case 0:
+                if (options.ReCalculateUncompressedSize)
+                    uncompressedSize = compressedSize;
+                if (options.ReCalculateCRC32)
+                {
+                    using LengthLimitedStream lls = new(source, compressedSize);
+                    Crc32 crc = new();
+                    crc.Append(lls);
+                    cdh.CRC32 = crc.GetCurrentHashAsUInt32();
+                }
+                break;
+            case 8 when options.ReCalculateCRC32 || options.ReCalculateCompressedSize || options.ReCalculateUncompressedSize:
+                using (LengthLimitedStream lls = new(source, compressedSize))
+                {
+                    AnalyzeDeflateStream(source, out uint crc32, out ulong compressedSizeLocal, out ulong uncompressedSizeLocal);
+                    if (options.ReCalculateCRC32)
+                        cdh.CRC32 = crc32;
+                    if (options.ReCalculateCompressedSize)
+                        compressedSize = compressedSizeLocal;
+                    if (options.ReCalculateUncompressedSize)
+                        uncompressedSize = uncompressedSizeLocal;
+                }
+                break;
+        }
+    }
+    private static void AnalyzeDeflateStream(Stream stream, out uint crc32, out ulong compressedSize, out ulong uncompressedSize)
+    {
+        const int BufferSize = 8192;
+        using IDisposable inflater = InflaterAccessor.CreateInflater();
+        Crc32 crc = new();
+        compressedSize = 0;
+        uncompressedSize = 0;
+        byte[] compressedBuffer = ArrayPool<byte>.Shared.Rent(BufferSize);
         try
         {
-            Crc32 crc = new();
-            length = 0;
-            while (true)
+            byte[] uncompressedBuffer = ArrayPool<byte>.Shared.Rent(BufferSize);
+            try
             {
-                int read = stream.Read(array, 0, array.Length);
-                if (read <= 0)
-                    break;
-                crc.Append(array.AsSpan(0, read));
-                length += (uint)read;
+                while (true)
+                {
+                    int read = InflaterAccessor.Inflate(inflater, uncompressedBuffer);
+                    if (read > 0)
+                    {
+                        uncompressedSize += (uint)read;
+                        crc.Append(uncompressedBuffer.AsSpan(0, read));
+                    }
+                    else if (InflaterAccessor.Finished(inflater))
+                    {
+                        compressedSize -= InflaterAccessor.GetAvailableIn(inflater);
+                        crc32 = crc.GetCurrentHashAsUInt32();
+                        return;
+                    }
+                    else if (InflaterAccessor.GetAvailableIn(inflater) == 0)
+                    {
+                        read = stream.Read(compressedBuffer, 0, compressedBuffer.Length);
+                        compressedSize += (uint)read;
+                        InflaterAccessor.SetInput(inflater, compressedBuffer.AsMemory(0, read));
+                    }
+                }
             }
-            crc32 = crc.GetCurrentHashAsUInt32();
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(uncompressedBuffer);
+            }
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(array);
+            ArrayPool<byte>.Shared.Return(compressedBuffer);
         }
+    }
+    private static void ApplyNewValue(this ref LocalFileHeader self, ExtraFieldCollection extraFields, ulong uncompressedSize, ulong compressedSize)
+    {
+        const int MaxBufferSize = sizeof(ulong) * 2;
+
+        extraFields.ExtraFields.RemoveAll(it => it.ID == 0x0001);
+        Span<byte> buffer = stackalloc byte[MaxBufferSize];
+        int bufferSize = 0;
+        self.UncompressedSize = WriteU32(buffer, ref bufferSize, uncompressedSize);
+        self.CompressedSize = WriteU32(buffer, ref bufferSize, compressedSize);
+        if (bufferSize > 0)
+        {
+            extraFields.ExtraFields.Add(new()
+            {
+                ID = 0x0001,
+                Data = buffer[..bufferSize].ToArray()
+            });
+        }
+    }
+    private static void ApplyNewValue(this ref CentralDirectoryHeader self, ExtraFieldCollection extraFields, ulong uncompressedSize, ulong compressedSize, ulong localHeaderOffset, uint startDiskNumber)
+    {
+        const int MaxBufferSize = sizeof(ulong) * 3 + sizeof(uint);
+
+        extraFields.ExtraFields.RemoveAll(it => it.ID == 0x0001);
+        Span<byte> buffer = stackalloc byte[MaxBufferSize];
+        int bufferSize = 0;
+        self.UncompressedSize = WriteU32(buffer, ref bufferSize, uncompressedSize);
+        self.CompressedSize = WriteU32(buffer, ref bufferSize, compressedSize);
+        self.LocalHeaderOffset = WriteU32(buffer, ref bufferSize, localHeaderOffset);
+        self.StartDiskNumber = WriteU16(buffer, ref bufferSize, startDiskNumber);
+        if (bufferSize > 0)
+        {
+            extraFields.ExtraFields.Add(new()
+            {
+                ID = 0x0001,
+                Data = buffer[..bufferSize].ToArray()
+            });
+        }
+    }
+    private static uint WriteU32(Span<byte> buffer, ref int bufferSize, ulong value)
+    {
+        bool overflowed = false;
+        uint result = value.CreateSaturatingU32(ref overflowed);
+        if (overflowed)
+        {
+            BinaryPrimitives.WriteUInt64LittleEndian(buffer[bufferSize..], value);
+            bufferSize += sizeof(uint);
+        }
+        return result;
+    }
+    private static ushort WriteU16(Span<byte> buffer, ref int bufferSize, uint value)
+    {
+        bool overflowed = false;
+        ushort result = value.CreateSaturatingU16(ref overflowed);
+        if (overflowed)
+        {
+            BinaryPrimitives.WriteUInt32LittleEndian(buffer[bufferSize..], value);
+            bufferSize += sizeof(uint);
+        }
+        return result;
     }
 
     public struct Options()
@@ -155,6 +294,8 @@ public static class ZIPRepairer
         public bool IgnoreDiskNumber = true;
         public bool ReCalculateEntryCount = true;
         public bool ReCalculateCRC32 = true;
+        public bool ReCalculateCompressedSize = true;
         public bool ReCalculateUncompressedSize = true;
+        public bool ValidateEOCD64ByEOCD = true;
     }
 }

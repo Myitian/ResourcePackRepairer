@@ -31,4 +31,31 @@ internal static partial class Program
                 break;
         }
     }
+    internal static ushort CreateSaturatingU16(this uint number, ref bool overflowed)
+    {
+        if (number >= ushort.MaxValue)
+        {
+            overflowed = true;
+            return ushort.MaxValue;
+        }
+        return (ushort)number;
+    }
+    internal static ushort CreateSaturatingU16(this ulong number, ref bool overflowed)
+    {
+        if (number >= ushort.MaxValue)
+        {
+            overflowed = true;
+            return ushort.MaxValue;
+        }
+        return (ushort)number;
+    }
+    internal static uint CreateSaturatingU32(this ulong number, ref bool overflowed)
+    {
+        if (number >= uint.MaxValue)
+        {
+            overflowed = true;
+            return uint.MaxValue;
+        }
+        return (uint)number;
+    }
 }

@@ -1,9 +1,9 @@
 namespace ResourcePackRepairer.ZIP;
 
-public class LengthLimitedStream(Stream stream, long length, bool leaveOpen = true) : Stream
+public sealed class LengthLimitedStream(Stream stream, ulong length, bool leaveOpen = true) : Stream
 {
-    protected long _remaining = length;
-    protected readonly bool _leaveOpen = leaveOpen;
+    private ulong _remaining = length;
+    private readonly bool _leaveOpen = leaveOpen;
     public Stream BaseStream { get; } = stream;
     public override bool CanRead => BaseStream.CanRead;
     public override bool CanSeek => false;
@@ -30,28 +30,28 @@ public class LengthLimitedStream(Stream stream, long length, bool leaveOpen = tr
     }
     public override int Read(byte[] buffer, int offset, int count)
     {
-        long c = Math.Min(count, _remaining);
+        ulong c = Math.Min((ulong)count, _remaining);
         int result = BaseStream.Read(buffer, offset, (int)c);
         _remaining -= c;
         return result;
     }
     public override int Read(Span<byte> buffer)
     {
-        long c = Math.Min(buffer.Length, _remaining);
+        ulong c = Math.Min((ulong)buffer.Length, _remaining);
         int result = BaseStream.Read(buffer[..(int)c]);
         _remaining -= c;
         return result;
     }
     public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
     {
-        long c = Math.Min(count, _remaining);
+        ulong c = Math.Min((ulong)count, _remaining);
         Task<int> result = BaseStream.ReadAsync(buffer, offset, (int)c, cancellationToken);
         _remaining -= c;
         return result;
     }
     public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
     {
-        long c = Math.Min(buffer.Length, _remaining);
+        ulong c = Math.Min((ulong)buffer.Length, _remaining);
         ValueTask<int> result = BaseStream.ReadAsync(buffer[..(int)c], cancellationToken);
         _remaining -= c;
         return result;
