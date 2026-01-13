@@ -6,7 +6,7 @@ namespace ResourcePackRepairer;
 
 internal static partial class Program
 {
-    internal static void Main(string[] args)
+    public static void Main(string[] args)
     {
         ArgParser argx = new(args, ignoreCase: true,
             new("--help", 0, "-h", "-?"),
@@ -121,7 +121,7 @@ internal static partial class Program
                 File.Open(file, FileMode.Create, FileAccess.Write, FileShare.Read);
         }
     }
-    internal static ushort CreateSaturatingU16(this uint number, ref bool overflowed)
+    public static ushort CreateSaturatingU16(this uint number, ref bool overflowed)
     {
         if (number >= ushort.MaxValue)
         {
@@ -130,7 +130,7 @@ internal static partial class Program
         }
         return (ushort)number;
     }
-    internal static ushort CreateSaturatingU16(this ulong number, ref bool overflowed)
+    public static ushort CreateSaturatingU16(this ulong number, ref bool overflowed)
     {
         if (number >= ushort.MaxValue)
         {
@@ -139,7 +139,7 @@ internal static partial class Program
         }
         return (ushort)number;
     }
-    internal static uint CreateSaturatingU32(this ulong number, ref bool overflowed)
+    public static uint CreateSaturatingU32(this ulong number, ref bool overflowed)
     {
         if (number >= uint.MaxValue)
         {
@@ -149,7 +149,7 @@ internal static partial class Program
         return (uint)number;
     }
 
-    internal enum Mode
+    public enum Mode
     {
         ZIP,
         PNG

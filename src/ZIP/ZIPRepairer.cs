@@ -23,6 +23,8 @@ public static class ZIPRepairer
     /// <exception cref="NotSupportedException" />
     public static void Repair(Stream source, Stream destination, in Options options)
     {
+        const ushort Zip64VersionNeeded = 45;
+
         // Read EOCD from source
         EndOfCentralDirectory64 eocd64 = FindEOCD(source, options, out byte[] extras, out byte[] comment);
         if (options.IgnoreDiskNumber)
@@ -33,9 +35,19 @@ public static class ZIPRepairer
         else if (eocd64.DiskNumber != 0 || eocd64.StartDiskNumber != 0)
             throw new NotSupportedException("Spanned ZIP is not supported!");
 
+        bool zip64required = true;
+        if (eocd64.SizeOfRecord == 0)
+        {
+            // EOCD64 converted from EOCD will have a SizeOfRecord=0
+            zip64required = false;
+            eocd64.SizeOfExtras = extras.Length;
+            eocd64.VersionMadeBy = Zip64VersionNeeded;
+            eocd64.VersionNeeded = Zip64VersionNeeded;
+        }
+
         source.Position = (long)eocd64.DirectoryOffset;
         long endCD = (long)(eocd64.DirectoryOffset + eocd64.DirectorySize);
-        List<FullCentralDirectoryHeader> cdhs = [];
+        List<FullCentralDirectoryHeader> cdhList = [];
         ExtraFieldCollection lfhExtraFields = new();
         while (source.Position < endCD)
         {
@@ -68,12 +80,21 @@ public static class ZIPRepairer
 
             // Save CDH to list
             localHeaderOffset = (ulong)destination.Length;
-            fcdh.CDH.ApplyNewValue(fcdh.ExtraFields, uncompressedSize, compressedSize, localHeaderOffset, 0);
-            cdhs.Add(fcdh);
+            if (fcdh.CDH.ApplyNewValue(fcdh.ExtraFields, uncompressedSize, compressedSize, localHeaderOffset, 0))
+            {
+                zip64required = true;
+                fcdh.CDH.VersionMadeBy = Math.Min(fcdh.CDH.VersionMadeBy, Zip64VersionNeeded);
+                fcdh.CDH.VersionNeeded = Math.Min(fcdh.CDH.VersionNeeded, Zip64VersionNeeded);
+            }
+            cdhList.Add(fcdh);
 
             // Write LFH to destination
             lfh = new(fcdh.CDH);
-            lfh.ApplyNewValue(lfhExtraFields, uncompressedSize, compressedSize);
+            if (lfh.ApplyNewValue(lfhExtraFields, uncompressedSize, compressedSize))
+            {
+                zip64required = true;
+                lfh.VersionNeeded = Math.Min(lfh.VersionNeeded, Zip64VersionNeeded);
+            }
             if (!lfhExtraFields.TryGetLengthInBytes(out lfh.ExtraFieldLength))
                 throw new InvalidDataException($"Overlong ExtraField for {Encoding.UTF8.GetString(fcdh.FileName)}!");
             destination.Write(LocalFileHeader.Signature);
@@ -87,7 +108,7 @@ public static class ZIPRepairer
             source.Position = pos;
         }
         ulong cdhStartPos = (ulong)destination.Length;
-        foreach (FullCentralDirectoryHeader fcdh in cdhs)
+        foreach (FullCentralDirectoryHeader fcdh in cdhList)
         {
             // Write CDH to destination
             fcdh.WriteToStream(destination);
@@ -97,14 +118,15 @@ public static class ZIPRepairer
         eocd64.DirectoryOffset = cdhStartPos;
         eocd64.DirectorySize = (ulong)destination.Length - cdhStartPos;
         if (options.ReCalculateEntryCount)
-            eocd64.TotalEntries = eocd64.EntriesOnThisDisk = (uint)cdhs.Count;
-        EndOfCentralDirectory eocd = EndOfCentralDirectory.CreateFromEOCD64(eocd64, out bool overflowed);
+            eocd64.TotalEntries = eocd64.EntriesOnThisDisk = (uint)cdhList.Count;
+        EndOfCentralDirectory eocd = EndOfCentralDirectory.CreateFromEOCD64(eocd64, ref zip64required);
         eocd.CommentLength = (ushort)comment.Length;
-        if (overflowed)
+        if (zip64required)
         {
             long eocd64offset = destination.Length;
             destination.Write(EndOfCentralDirectory64.Signature);
             IDataStruct.WriteToStream(destination, eocd64);
+            destination.Write(extras);
             destination.Write(EndOfCentralDirectory64Locator.Signature);
             IDataStruct.WriteToStream(destination, new EndOfCentralDirectory64Locator()
             {
@@ -228,29 +250,33 @@ public static class ZIPRepairer
             ArrayPool<byte>.Shared.Return(compressedBuffer);
         }
     }
-    private static void ApplyNewValue(this ref LocalFileHeader self, ExtraFieldCollection extraFields, ulong uncompressedSize, ulong compressedSize)
+    private static bool ApplyNewValue(this ref LocalFileHeader self, ExtraFieldCollection extraFields, ulong uncompressedSize, ulong compressedSize)
     {
         const int MaxBufferSize = sizeof(ulong) * 2;
 
-        extraFields.ExtraFields.RemoveAll(it => it.ID == 0x0001);
+        int firstZ64EF = extraFields.ExtraFields.FindIndex(IsZip64ExtraField);
+        extraFields.ExtraFields.RemoveAll(IsZip64ExtraField);
         Span<byte> buffer = stackalloc byte[MaxBufferSize];
         int bufferSize = 0;
         self.UncompressedSize = WriteU32(buffer, ref bufferSize, uncompressedSize);
         self.CompressedSize = WriteU32(buffer, ref bufferSize, compressedSize);
         if (bufferSize > 0)
         {
-            extraFields.ExtraFields.Add(new()
+            extraFields.ExtraFields.Insert(Math.Max(0, firstZ64EF), new()
             {
                 ID = 0x0001,
                 Data = buffer[..bufferSize].ToArray()
             });
+            return true;
         }
+        return false;
     }
-    private static void ApplyNewValue(this ref CentralDirectoryHeader self, ExtraFieldCollection extraFields, ulong uncompressedSize, ulong compressedSize, ulong localHeaderOffset, uint startDiskNumber)
+    private static bool ApplyNewValue(this ref CentralDirectoryHeader self, ExtraFieldCollection extraFields, ulong uncompressedSize, ulong compressedSize, ulong localHeaderOffset, uint startDiskNumber)
     {
         const int MaxBufferSize = sizeof(ulong) * 3 + sizeof(uint);
 
-        extraFields.ExtraFields.RemoveAll(it => it.ID == 0x0001);
+        int firstZ64EF = extraFields.ExtraFields.FindIndex(IsZip64ExtraField);
+        extraFields.ExtraFields.RemoveAll(IsZip64ExtraField);
         Span<byte> buffer = stackalloc byte[MaxBufferSize];
         int bufferSize = 0;
         self.UncompressedSize = WriteU32(buffer, ref bufferSize, uncompressedSize);
@@ -259,13 +285,16 @@ public static class ZIPRepairer
         self.StartDiskNumber = WriteU16(buffer, ref bufferSize, startDiskNumber);
         if (bufferSize > 0)
         {
-            extraFields.ExtraFields.Add(new()
+            extraFields.ExtraFields.Insert(Math.Max(0, firstZ64EF), new()
             {
                 ID = 0x0001,
                 Data = buffer[..bufferSize].ToArray()
             });
+            return true;
         }
+        return false;
     }
+    private static bool IsZip64ExtraField(ExtraField it) => it.ID == 0x0001;
     private static uint WriteU32(Span<byte> buffer, ref int bufferSize, ulong value)
     {
         bool overflowed = false;

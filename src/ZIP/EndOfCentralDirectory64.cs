@@ -8,7 +8,7 @@ namespace ResourcePackRepairer.ZIP;
 public struct EndOfCentralDirectory64(EndOfCentralDirectory eocd) : IDataStruct
 {
     public static ReadOnlySpan<byte> Signature => "PK\x6\x6"u8;
-    public static readonly uint MaxAllowedSize = (uint)Unsafe.SizeOf<EndOfCentralDirectory64>() + (uint)Array.MaxLength - sizeof(ulong);
+    public static readonly uint MaxAllowedSize = (uint)Array.MaxLength + (uint)Unsafe.SizeOf<EndOfCentralDirectory64>() - sizeof(ulong);
     public ulong SizeOfRecord = 0;
     public ushort VersionMadeBy;
     public ushort VersionNeeded;
@@ -18,7 +18,11 @@ public struct EndOfCentralDirectory64(EndOfCentralDirectory eocd) : IDataStruct
     public ulong TotalEntries = eocd.TotalEntries;
     public ulong DirectorySize = eocd.DirectorySize;
     public ulong DirectoryOffset = eocd.DirectoryOffset;
-    public readonly int SizeOfExtras => (int)((uint)SizeOfRecord - (uint)Unsafe.SizeOf<EndOfCentralDirectory64>() + sizeof(ulong));
+    public int SizeOfExtras
+    {
+        readonly get => (int)((uint)SizeOfRecord - (uint)Unsafe.SizeOf<EndOfCentralDirectory64>() + sizeof(ulong));
+        set => SizeOfRecord = (uint)value + (uint)Unsafe.SizeOf<EndOfCentralDirectory64>() - sizeof(ulong);
+    }
 
     public void ReverseEndianness()
     {

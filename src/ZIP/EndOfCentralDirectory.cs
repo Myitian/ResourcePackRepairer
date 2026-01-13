@@ -16,9 +16,8 @@ public struct EndOfCentralDirectory : IDataStruct
     public uint DirectoryOffset;
     public ushort CommentLength;
 
-    public static EndOfCentralDirectory CreateFromEOCD64(EndOfCentralDirectory64 eocd64, out bool overflowed)
+    public static EndOfCentralDirectory CreateFromEOCD64(EndOfCentralDirectory64 eocd64, ref bool overflowed)
     {
-        overflowed = false;
         return new()
         {
             DiskNumber = eocd64.DiskNumber.CreateSaturatingU16(ref overflowed),
