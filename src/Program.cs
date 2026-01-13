@@ -36,9 +36,8 @@ internal static partial class Program
         {
             Console.Error.WriteLine("""
                 Usage:
-                    ResourcePackRepairer [options...]
+                    ResourcePackRepairer [arguments...]
 
-                Options:
                 """);
             argx.WriteHelp(Console.Error);
             Console.Error.WriteLine();
@@ -57,13 +56,13 @@ internal static partial class Program
         }
         if (!argx.TryGetString("--input", out string? inputFile))
         {
-            Console.Out.Write("Input:");
+            Console.Out.Write("Input file path:");
             inputFile = Console.In.ReadLine().AsSpan().Trim().Trim('"').ToString();
             Console.Out.WriteLine();
         }
         if (!argx.TryGetString("--output", out string? outputFile))
         {
-            Console.Out.Write("Output:");
+            Console.Out.Write("Output file path:");
             outputFile = Console.In.ReadLine().AsSpan().Trim().Trim('"').ToString();
             Console.Out.WriteLine();
         }
