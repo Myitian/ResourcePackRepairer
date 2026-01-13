@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 
 namespace ResourcePackRepairer;
 
-internal static class StreamHelpers
+static class StreamHelpers
 {
     // position after returned:
     //                   v

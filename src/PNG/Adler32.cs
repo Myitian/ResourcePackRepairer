@@ -1,6 +1,6 @@
 ﻿namespace ResourcePackRepairer.PNG;
 
-public class Adler32
+public sealed class Adler32
 {
     public const uint ModAdler = 65521;
     private uint _s1 = 1;

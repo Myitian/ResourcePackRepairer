@@ -6,7 +6,7 @@ namespace ResourcePackRepairer;
 // Warning!
 // To simplify the codebase, reflection and UnsafeAccessorAttribute is used here to directly access
 // System.IO.Compression.Inflater, which may introduce unreliability across different target .NET versions.
-internal static class InflaterAccessor
+static class InflaterAccessor
 {
     public const string InflaterType = "System.IO.Compression.Inflater, System.IO.Compression";
     public const string ZLibStreamHandleType = "System.IO.Compression.ZLibNative+ZLibStreamHandle, System.IO.Compression";

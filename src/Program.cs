@@ -4,7 +4,7 @@ using SimpleArgs;
 
 namespace ResourcePackRepairer;
 
-internal static partial class Program
+static class Program
 {
     public static void Main(string[] args)
     {

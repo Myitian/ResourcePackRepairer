@@ -2,7 +2,7 @@
 
 namespace ResourcePackRepairer;
 
-internal sealed unsafe class SimpleUnmanagedMemoryStream : Stream
+sealed unsafe class SimpleUnmanagedMemoryStream : Stream
 {
     private byte* _pointer;
     private long _length;
