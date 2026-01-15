@@ -7,7 +7,7 @@ Currently, it can repair the following types of file corruption:
 - ZIP file:
   - incorrect Local File Header
   - incorrect CRC-32 checksum
-  - incorrect compressed size
+  - incorrect compressed size for deflate-compressed entry
   - incorrect uncompressed size
   - incorrect disk number
   - incorrect entry count
